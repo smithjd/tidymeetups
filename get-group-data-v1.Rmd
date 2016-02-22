@@ -1,0 +1,178 @@
+---
+title: "get-meetup-data-api-v3"
+author: "John D. Smith"
+date: "December 22, 2015"
+output: html_document
+---
+&category=34,2
+
+tech category=34
+careerbiz - category=2
+
+only=id,name
+offset = 0-?
+
+API docoumentation: 
+* groups: http://www.meetup.com/meetup_api/docs/find/groups/ 
+* members: http://www.meetup.com/meetup_api/docs/2/members/
+for testing: https://secure.meetup.com/meetup_api/console/?path=/find/groups
+
+Exploring documentation in https://cran.r-project.org/web/packages/tidyjson/vignettes/introduction-to-tidyjson.html
+
+
+```{r}
+library(httr)
+library(lubridate)
+library(jsonlite)
+library(plyr)
+library(dplyr)
+library(tidyjson)
+library(readr)
+# library(rjson)
+# library(RJSONIO)
+setwd("~/Documents/cch/tidymeetups")
+options(stringsAsFactors = FALSE)
+
+my_spread_values <- function(x, names, values) { 
+    stopifnot(length(names) == length(values))
+    do.call("spread_values", c(list(x), setNames(as.list(values), names )))
+ } 
+
+```
+Groups  data documented here: http://www.meetup.com/meetup_api/docs/find/groups/
+&only=created,category,description,id,join_mode,members,name,urlname,visibility,organizer,welcome_message,who,next_event
+```{r Query API}
+get_json <- function(num_groups, page_num, meetup_api = Sys.getenv("meetup_api")) {
+  url_num_of_groups <- paste0("&page=",num_groups)
+  url_page <- paste0("&offset=", page_num)
+  url_group_stub <- paste0("https://api.meetup.com/find/groups?sign=true&photo-host=public&key=", meetup_api)
+  url_query <- "&zip=97206&radius=3"
+  
+  (url <- paste0(url_group_stub,url_num_of_groups,url_query,url_page))
+  raw_contents <- GET(url = url)
+  
+  raw_contents$status_code
+  (n_groups_available <- as.numeric(raw_contents$headers$`x-total-count`))
+content(raw_contents, "text")
+}
+
+json1 <- get_json(num_groups = 200, page_num = 0)
+# json2 <- get_json(num_groups = 200, page_num = 1)
+# json3 <- get_json(num_groups = 200, page_num = 2)
+
+```
+# Now define functions to upack json
+```{r}
+
+
+parse_group <- function(json) {
+
+group_string_vars <- c("score", "id", "name", "link", "urlname", "description", "city", "country", "state", "join_mode", "visibility", "who", "timezone")
+
+group_numeric_vars <- c("created", "lat", "lon", "members")
+
+group1 <- json %>%  as.tbl_json %>% 
+    gather_array %>% 
+    my_spread_values(
+     group_string_vars, lapply(group_string_vars, jstring) ) %>% 
+  select(-document.id)
+
+group2 <- json %>%  as.tbl_json %>% 
+    gather_array %>% 
+    my_spread_values(
+     group_numeric_vars, lapply(group_numeric_vars, jnumber) )  %>% 
+  select(-document.id)
+
+group3 <- json %>% as.tbl_json %>%
+  gather_array %>% 
+  spread_values(group_id = jstring("id" ) ) %>%
+  enter_object("organizer") %>%
+    spread_values(
+        organizer_id = jstring(  "id"),
+        organizer_name = jstring("name"),
+        organizer_bio = jstring( "bio")
+        ) %>% select(-array.index, -document.id )
+
+group_category <- json %>%  as.tbl_json %>%
+    gather_array %>%  #gather_keys %>%
+    spread_values(group_id = jstring("id" ) ) %>%
+      enter_object("category") %>%
+      spread_values(
+        category_id = jstring("id"),
+        category_name = jstring("name"),
+        category_short_name = jstring("shortname")
+      ) %>% 
+   select(-array.index, -document.id )
+      
+# varnames <-  c("category_id", "category_name", "category_shortname")
+# strings <-  c("id", "name", "shortname")
+# 
+# group_category <- json %>%  as.tbl_json %>% 
+#   gather_array %>% 
+#   spread_values(group_id = jstring("id")) %>% 
+#   enter_object("category") %>% my_spread_values( 
+#     varnames, list(jstring(strings[1]), jstring(strings[2]), jstring(strings[3]) ) )
+
+# group$created <- as.POSIXct(group$created/1000, origin = "1970-01-01")
+group <- left_join(group1, group2, by = c("array.index" = "array.index"))
+group <- left_join(group, group3, by = c("id" = "group_id")) 
+group <- left_join(group, group_category, by = c("id" = "group_id"))
+group
+}
+
+parse_next_event <- function(json) {
+event_vars <- c("next_event_id", "next_event_name", "next_event_time", "next_yes_rsvp_count")
+event_ids <- c("id", "name", "time", "yes_rsvp_count")
+
+meet_event <- json %>%  as.tbl_json %>% 
+gather_array %>%  #gather_keys %>% 
+spread_values(group_id = jstring("id") ) %>%
+  enter_object("next_event") %>% 
+  my_spread_values(event_vars, list(jstring(event_ids[1]), jstring(event_ids[2]), jnumber(event_ids[3]), jnumber(event_ids[4]) ) )
+  meet_event$next_event_time <- as.POSIXct(meet_event$next_event_time/1000, origin = "1970-01-01")
+  meet_event
+}
+
+parse_group_organizers <- function(json) {
+  organizers <- json %>% as.tbl_json %>% 
+    gather_array %>%  spread_values(
+      group_id = jstring("id")
+      ) %>%
+    enter_object("organizer") %>% 
+      # gather_keys %>% 
+      spread_values(
+        organizer_id = jstring("id"),
+        organizer_name = jstring("name"),
+        organizer_bio = jstring("bio")
+      )
+  organizers
+}
+
+# Unpack, put them together and save...
+
+group1 <- parse_group(json1)
+next_event1 <- parse_next_event(json1)
+organizers1 <- parse_group_organizers(json1)
+
+group2 <- parse_group(json2)
+next_event2 <- parse_next_event(json2)
+organizers2 <- parse_group_organizers(json2)
+
+groups <- bind_rows(group1,group2)
+next_events <- bind_rows(next_event1, next_event2)
+
+# already merged into groups, but maybe worth keeping separate
+organizers <- bind_rows(organizers1, organizers2)
+
+save(groups,next_events, organizers, file = "meetup_groups.Rdata")
+
+```
+Mr Flick solution!  
+```{r}
+varnames <-  c("category_id", "category_name", "category_shortname")
+strings <-  c("id", "name", "shortname")
+objects <- json1 %>%  as.tbl_json %>% 
+enter_object("category") %>% my_spread_values( 
+    varnames, list(jstring(strings[1]), jstring(strings[2]), jstring(strings[3]) ) )
+
+```

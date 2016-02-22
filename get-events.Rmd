@@ -1,0 +1,295 @@
+---
+title: "get-events"
+author: "John D. Smith"
+date: "January 28, 2016"
+output: html_document
+---
+&category=34,2
+
+tech category=34
+careerbiz - category=2
+
+API docoumentation: 
+* http://www.meetup.com/meetup_api/docs/2/events/
+* groups: http://www.meetup.com/meetup_api/docs/find/groups/ 
+* members: http://www.meetup.com/meetup_api/docs/2/members/
+
+for testing: https://secure.meetup.com/meetup_api/console/?path=/2/events&group_urlname=ny-tech
+
+```{r}
+library(httr)
+library(stringr)
+library(lubridate)
+library(jsonlite)
+library(plyr)
+library(dplyr)
+library(tidyjson)
+library(readr)
+library(ggplot2)
+source("~/Rfunctions/setup_my_google.R")
+setwd("~/Documents/cch/tidymeetups")
+options(stringsAsFactors = FALSE)
+
+# group_id <- 16967362
+meetup_api <- Sys.getenv("meetup_api")
+
+```
+Standard tidyjson functions
+```{r}
+my_spread_values <- function(x, names_list, string_type) { 
+  # A wrapper for "spread_values" that taks a list of names and a string type, so there's much less code...
+  # stopifnot( as.character(string_type) %in% c("jnumber", "jstring", "jlogical") )
+  do.call("spread_values", 
+    c(list(x), setNames(lapply(names_list, string_type), as.list(names_list) ) ) )
+} 
+
+get_json_tbl_data_types <- function(my_tbl_json) {
+# find the keys to the json, to determine which function sequence to use for retrieval
+  json_data_types <- my_tbl_json %>% gather_array %>% gather_keys %>% json_types %>% group_by(key, type) %>% summarise(count = n())
+  json_data_types <- ungroup(json_data_types) %>% mutate(key = as.character(key), type = as.character(type)) %>% arrange(type, key)
+}
+
+get_object_keys <- function(json_obj, object_name) {
+# slightly different sequence to find the keys to an OBJECT:
+  json_obj %>% gather_array %>%
+  enter_object(object_name) %>% gather_keys %>% json_types %>% 
+  group_by(key, type) %>% summarise(count = n())
+}
+
+```
+identify groups
+```{r}
+groups <- readRDS( "meetup_groups.Rdata")
+
+# for testing:
+groups %>% filter(grepl("data|chifoo", name, ignore.case = T)) %>% select(id,name)
+```
+
+explore the json about get member info ... 
+separate query to get members other groups...
+```{r}
+# https://api.meetup.com/2/events?offset=0&format=json&limited_events=False&group_urlname=ny-tech&photo-host=public&time=-13m%2C1m&page=20&fields=&order=time&status=past&desc=false
+
+url_event_stub <- "https://api.meetup.com/2/events?format=json&limited_events=False&photo-host=public&sign=true&key="
+status <- "past"
+text_format <- "plain"
+time <- "-24m,1m"
+offset <- 0
+page <- 200
+group_id <- "490808"
+  
+get_json_tbl <- function(page, offset, group_id, meetup_api = Sys.getenv("meetup_api")) {
+  
+  (url <- paste0(url_event_stub, meetup_api, "&text_format=", text_format, "&status=", status,
+                "&time=", time, "&group_id=", group_id, "&page=", page, "&offset=", offset))
+  raw_contents <- GET(url = url)
+
+  json_raw <- httr::content(raw_contents, type = "text")
+  json_contents <- sub('^\\{"results":\\[', "[", json_raw)
+  json_contents <- sub('\\],"meta"\\:\\{.*\\}.$', "]",json_contents)
+  gsub('\\\\/', "/",json_contents)  %>% as.tbl_json 
+  }
+
+json <- get_json_tbl(group_id = 16967362, offset = 0, page = 200)
+
+# json2 <- get_json_tbl(num_events = 200, page = 1)
+# json3 <- get_json_tbl(num_events = 200, page = 2)
+
+json_obj <- json %>% as.tbl_json 
+
+json_data_types <- get_json_tbl_data_types(json_obj)
+
+json_data_types %>% filter(type == "number") %>% select(key) %>% unlist %>% as.array
+json_data_types %>% filter(type == "string") %>% select(key) %>% unlist %>% as.array 
+json_data_types %>% filter(type != "string" & type != "number") %>% select(key, type) 
+
+get_object_keys(json_obj, "rating")
+
+```
+
+# Now define functions to upack json for this query and get all events for a specific list of Meetups
+```{r}
+
+url_event_stub <- "https://api.meetup.com/2/events?format=json&limited_events=False&photo-host=public&sign=true&key="
+status <- "past"
+text_format <- "plain"
+time <- "-48m,1m"
+offset <- 0
+page <- 200
+# group_id <- "490808"
+  
+get_json_tbl <- function(page, offset, group_id, meetup_api = Sys.getenv("meetup_api")) {
+ 
+  (url <- paste0(url_event_stub, meetup_api, "&text_format=", text_format, "&status=", status,
+                "&time=", time, "&group_id=", group_id, "&page=", page, "&offset=", offset))
+  # (url <- paste0(url_event_stub, meetup_api, "&text_format=", text_format, "&status=", status,
+  #               "&time=", time, "&group_urlname=pdxpython", "&page=", page, "&offset=", offset))
+
+
+  raw_contents <- GET(url = url)
+
+  json_raw <- httr::content(raw_contents, type = "text")
+  json_contents <- sub('^\\{"results":\\[', "[", json_raw)
+  json_contents <- sub('\\],"meta"\\:\\{.*\\}.$', "]",json_contents)
+  gsub('\\\\/', "/",json_contents)
+  }
+
+# tbl_json <- get_json_tbl(group_id = 16967362, offset = 0, page = 200)
+
+get_event_data_frame <- function(group_id) {
+  
+  offset <- 0  
+  num_list <- c("created", "duration", "headcount", "maybe_rsvp_count", "rsvp_limit", "time", "updated", "utc_offset", "waitlist_count", "yes_rsvp_count")
+  chr_list <-  c("description", "event_url", "how_to_find_us", "id", "name", "status", "visibility")
+
+  while (offset >= 0) {
+    
+    tbl_json <- get_json_tbl(offset = offset, page = 200, group_id = group_id)
+  
+  	 event_strings <- tbl_json %>% gather_array %>% 
+  	   my_spread_values(
+  	      chr_list, jstring ) %>% 
+  	   select(-document.id, rec_num = array.index) # %>% 
+  	   # mutate(eventber_of_group = group_id)
+  
+  	 event_numerics <- tbl_json %>% gather_array %>% 
+  	   my_spread_values(
+  	      num_list, jnumber ) %>% 
+  	    select(-document.id, rec_num = array.index) 
+  	 event_numerics$created <- as.POSIXct(event_numerics$created/1000, origin = "1970-01-01")
+  	 event_numerics$time <- as.POSIXct(event_numerics$time/1000, origin = "1970-01-01")
+  	 event_numerics$updated <- as.POSIXct(event_numerics$updated/1000, origin = "1970-01-01")
+  	 event_numerics$duration_minutes <- event_numerics$duration/60000
+
+    group_id_events <- left_join(event_strings, event_numerics, by = c("rec_num" = "rec_num")) %>% 
+      select(-duration)
+
+    event_rating <- tbl_json %>% gather_array %>%
+      spread_values(event_id = jstring("id")) %>%
+      enter_object("rating") %>% 
+      my_spread_values(c("count","average"), jnumber) %>%
+      select(-document.id) %>%
+      mutate(group_organizing_event = group_id, rec_num = array.index)
+
+    group_id_events <- left_join( group_id_events, event_rating, by = c("rec_num" = "rec_num")) %>% 
+      select(-array.index, rec_num)
+  #     members <- left_join(members, mem_twitter_id, by = c("id" = "mem_id")) 
+  #     members <- left_join(members, mem_linkedin_id, by = c("id" = "mem_id")) %>% 
+  #       select(-rec_num)    
+  #     
+  #    member_topics <- tbl_json %>% gather_array %>% 
+  #      spread_values(member_id = jstring("id")) %>%
+  #      enter_object("topics") %>% gather_array %>%
+  #      my_spread_values(c("id","name","urlkey"), jstring) %>% 
+  #      select(-array.index, -document.id) %>% 
+  # 	   mutate(member_of_group = group_id) %>% rename(topic_id = id)
+  #   	
+  #     # accumulate batches into groups_id data frames
+  #     if (page == 0 ) {
+  #       group_id_events <- events
+  # 	    group_id_topics <- member_topics
+  # 	  } else {
+  #       group_id_events <- bind_rows(group_id_events, events)
+  #       group_id_topics <- bind_rows(group_id_topics, member_topics)
+  #     }
+    
+      # get another batch or jump out of the retrieval loop
+      offset <- offset + 1 
+      if ( dim(event_strings)[1] < 200 ) { 
+        # have run out of data for this group
+        offset <-  -1
+      } 
+    
+    Sys.sleep(1) # wait between iterations
+    cat('.')
+    
+    }  
+	
+    cat("+")
+    return(list("events" = group_id_events))
+  }  # finish this group_id
+
+# test with:
+# python_list <- get_event_data_frame(490808)
+# data_groups_list <-  c("11038292", "16967362", "13789762")
+
+get_many_groups <- function(list_of_ids){
+  for (list_num in seq_along(list_of_ids) ) {
+    # cat(paste(list_num, ",", list_of_ids[list_num], "\n") )
+    dataframes_this_list <- get_event_data_frame(group_id = list_of_ids[list_num])
+    # unpack the results
+     # accumulate batches into groups_id data frames
+      if (list_num == 1 ) {
+        # initialize
+        cum_events <- dataframes_this_list[["events"]]
+  	    # cum_topics <- dataframes_this_list[["topics"]]
+  	  } else {
+  	    # accumulate
+        cum_events <- bind_rows(cum_events, dataframes_this_list[["events"]])
+        # cum_topics <- bind_rows(cum_topics, dataframes_this_list[["topics"]])
+      }
+    }
+  return(list("all_events" = cum_events))  
+  }
+
+# data_groups_list <- c( "11038292","490808")
+data_groups_list <- c("490808", "11038292", "16967362", "1685557", "18393607")
+# data_groups_list <- c("11038292", "16967362", "13789762", "18393607", "15174102", "19149214", "17840052", "10136492", "6949282", "17836232", "6622532", "8245962", "490808","1685557")
+many_groups <- get_many_groups(data_groups_list)
+
+# more_data_groups_list <- c("19149214", "17753372","16786942")
+# some_groups <- get_many_groups(more_data_groups_list)
+
+# python <- get_many_groups("490808")
+
+```
+Extract and save
+Odd that Python events don't turn up when in this query
+
+```{r}
+group_tags <- read_tsv("~/Documents/cch/tidymeetups/group_tags.tsv", col_types = "cc")
+str(group_tags)
+
+selected_events <- many_groups[["all_events"]]
+# all_topics <- many_groups[["all_topics"]]
+
+# all_members <- bind_rows(all_members,more_members)
+# all_topics <- bind_rows(all_topics, more_topics)
+
+selected_events <- left_join(selected_events,group_tags, by = c("group_organizing_event" = "ID"))
+
+write_rds(selected_events, "selected_data_meetup_events.Rdata")
+# write_rds(all_topics, "all_data_meetup_topics.Rdata")
+
+```
+retrieve
+```{r}
+all_members <- readRDS( "all_data_meetup_events.Rdata")
+```
+Inpsect and summarize
+```{r}
+upload_google_ss(all_events, "All Meetup events in the past 2 years - selected groups")
+```
+explore selected events 
+```{r}
+group_tags <- read_tsv("~/Documents/cch/tidymeetups/group_tags.tsv", col_types = "cc")
+str(group_tags)
+selected_events <- left_join(selected_events,group_tags, by = c("group_organizing_event" = "ID"))
+
+selected_events  %>% filter(tag == "R Users" &  yes_rsvp_count < 5)  %>% select( time, name)
+org_events <- selected_events %>% filter(!str_detect(name, "Coursera|MOOC"))
+
+ggplot(data = org_events, aes(x = tag, y = yes_rsvp_count) ) + 
+  geom_boxplot() + 
+   ggtitle("Event size, selected meetups") +
+  xlab("Group") +
+  ylab("Interest measured by 'yes' RSVP's")
+
+ggplot(org_events, aes(x = time, y = yes_rsvp_count, colour = tag) ) + geom_smooth(se = F) +
+  geom_point() +
+  ggtitle("Event size, selected meetups") +
+  xlab("Date") +
+  ylab("Interest measured by 'yes' RSVP's")
+
+```
+

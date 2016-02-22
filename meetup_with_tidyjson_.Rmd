@@ -1,0 +1,140 @@
+---
+title: "A Meetup with tidyJSON"
+author: "John D. Smith"
+date: "February 21, 2016"
+output: html_document
+---
+The tidyjson package allows more control over the json to R data extraction process than the other JSON packages offer.  However, moving from the toy examples in the documentation and even the vignette to working code that etracts real data from a live API has more pitfalls and gaps than you would like. The error messages are mystifying and several crucial steps aren't mentioned.
+
+Here is the background documentation for this example
+
+* [tidyjson vignette](https://cran.r-project.org/web/packages/tidyjson/vignettes/introduction-to-tidyjson.html)
+* [General API documentation](http://www.meetup.com/meetup_api/docs/)
+* [**Groups** record documentation](http://www.meetup.com/meetup_api/docs/find/groups/)
+* [API Authorization](http://www.meetup.com/meetup_api/auth/#keysign)
+
+## Here are the libraries used in this example:
+```{r}
+library(httr)
+library(dplyr, warn.conflicts = F, quietly = T)
+library(tidyjson)
+library(magrittr)
+library(stringr)
+library(ggplot2)
+```
+Construct a URL and retrieve data from the API.  In actual use, there is additional machinery that's not shown here which retrieves multiple chunks, each of which has 200 records.
+```{r}
+# Get the first 200 records in page 0 of the API's data
+page_num <- 0
+
+# Retrieve the API key, which has been previously obtained and stored in the .Renviron file
+meetup_api <- Sys.getenv("meetup_api")
+
+# simplified pasting together of the URL for retrieval:
+url_stub <- paste0("https://api.meetup.com/find/groups?sign=true&photo-host=public,&page=200,&key=", meetup_api)
+url <- paste0(url_stub,"&offset=", page_num)
+
+# Get a batch of data from the API
+raw_contents <- GET(url = url)
+```
+Process the raw contents, so that tidyjson will be able to extract data from raw_contents
+```{r}
+json_raw <- httr::content(raw_contents, type = "text")
+json_contents <- sub('^\\{"results":\\[', "[", json_raw)
+json_contents <- sub('\\],"meta"\\:\\{.*\\}.$', "]",json_contents)
+my_tbl_json <- gsub('\\\\/', "/",json_contents)  %>% as.tbl_json
+```
+Define several functions that will be used repeatedly to invesigate or process the json.  A crucial assist was provided by [MrFlick](http://stackoverflow.com/users/2372064/mrflick) on Stack Overflow.
+```{r}
+my_spread_values <- function(x, names_list, string_type) {
+  # A wrapper for "spread_values" that taks a list of names and a string type. Easier to read and much less code.
+  do.call("spread_values",
+    c(list(x), setNames(lapply(names_list, string_type), as.list(names_list) ) ) )
+}
+
+get_json_tbl_data_types <- function(my_tbl_json) {
+# find the keys to the json, to determine which function sequence to use for retrieval
+  json_data_types <- my_tbl_json %>% gather_array %>% gather_keys %>% json_types %>% group_by(key, type) %>% summarise(count = n())
+  json_data_types <- ungroup(json_data_types) %>% mutate(key = as.character(key), type = as.character(type)) %>% arrange(type, key)
+}
+
+get_object_keys <- function(json_obj, object_name) {
+# slightly different sequence to find the keys to an OBJECT:
+  json_obj %>% gather_array %>%
+  enter_object(object_name) %>% gather_keys %>% json_types %>%
+  group_by(key, type) %>% summarise(count = n())
+}
+```
+Figure out all of the keys and types of data in the json
+```{r}
+data_types <- get_json_tbl_data_types(my_tbl_json)
+
+str_list  <- data_types  %>% filter(type == "string")  %>% select(key)
+str_array  <- str_list  %>% unlist  %>% as.array
+str_array
+
+num_list  <- data_types  %>% filter(type == "number")  %>% select(key)
+num_array  <- num_list  %>% unlist  %>% as.array
+num_array
+
+# Notice that all groups have an "organizer" object, but not all have a "category" or a "next_event"
+data_types %>% filter(type != "string" & type != "number")
+```
+Now get the keys for several objects (clusters of data)
+```{r}
+cat_keys <- my_tbl_json %>% get_object_keys("category") %T>% print
+org_keys <- my_tbl_json %>% get_object_keys("organizer") %T>% print
+```
+Now extract top-level data from the json in 2 passes, one for strings and one for numerics.  To get them all in one pass would involve a hand-writing a lot of code.
+```{r}
+group_strings <- my_tbl_json %>% 
+  gather_array %>% 
+  my_spread_values(str_array, jstring ) %>% 
+  select(-document.id)
+    
+group_numerics <- my_tbl_json %>% 
+  gather_array %>% 
+  my_spread_values(num_array, jnumber )  %>% 
+  select(-document.id)
+group_numerics$created <- as.POSIXct(group_numerics$created/1000, origin = "1970-01-01")
+```
+Could use my_spread_values inside the object "organizer", but in this case it's easier to just hard-code what we want.  Notice the assignment statements inside the spread_values function call that we would have had to code by hand in the long list of numberics and strings above.
+```{r}
+group_organizers <- my_tbl_json %>% 
+  gather_array %>% 
+  spread_values(group_id = jnumber("id" ) ) %>%
+  enter_object("organizer") %>%
+  spread_values(
+      organizer_id = jnumber(  "id"),
+      organizer_name = jstring("name"),
+      organizer_bio = jstring( "bio")
+      ) %>% 
+    select(-array.index, -document.id )
+
+group_category <- my_tbl_json %>%  
+    gather_array %>%  #gather_keys %>%
+    spread_values(group_id = jnumber("id" ) ) %>%
+      enter_object("category") %>%
+      spread_values(
+        category_id = jstring("id"),
+        category_name = jstring("name"),
+        category_short_name = jstring("shortname")
+      ) %>% 
+   select(-array.index, -document.id )
+
+```
+Join it all the pieces together into a data frame that we can later use for analysis.
+```{r}
+meetup_groups <- left_join(group_strings, group_numerics, by = c("array.index" = "array.index")) %>% select(-array.index, -score)
+meetup_groups <- left_join(meetup_groups, group_organizers, by = c("id" = "group_id")) 
+meetup_groups <- left_join(meetup_groups, group_category, by = c("id" = "group_id")) 
+
+```
+Have a peek at the data
+```{r}
+ggplot(data = meetup_groups, aes(category_short_name, members)) + 
+  geom_boxplot() + 
+  coord_flip() +
+  ggtitle("200 local Meetup Groups") + xlab("Group Category") + ylab("Cumulative number of members")
+```
+

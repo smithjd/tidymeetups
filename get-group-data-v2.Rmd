@@ -1,0 +1,233 @@
+title: "get-meetup-data-api-v3"
+---
+author: "John D. Smith"
+date: "December 22, 2015"
+output: html_document
+---
+&category=34,2
+
+tech category=34
+careerbiz - category=2
+
+only=id,name
+offset = 0-?
+
+API docoumentation: 
+* groups: http://www.meetup.com/meetup_api/docs/find/groups/ 
+* members: http://www.meetup.com/meetup_api/docs/2/members/
+for testing: https://secure.meetup.com/meetup_api/console/?path=/find/groups
+
+Exploring documentation in https://cran.r-project.org/web/packages/tidyjson/vignettes/introduction-to-tidyjson.html
+
+
+```{r}
+library(httr)
+library(lubridate)
+# library(jsonlite)
+# library(plyr)
+library(dplyr)
+library(tidyjson)
+library(readr)
+library(magrittr)
+library(stringr)
+# library(rjson)
+# library(RJSONIO)
+setwd("~/Documents/cch/tidymeetups")
+options(stringsAsFactors = FALSE)
+meetup_api <- Sys.getenv("meetup_api")
+url_stub <- paste0("https://api.meetup.com/find/groups?sign=true&photo-host=public&key=", meetup_api)
+
+get_json <- function(num_groups, page_num) {
+  url_num_of_groups <- paste0("&page=",num_groups)
+  url_page <- paste0("&offset=", page_num)
+  url_query <- "&group_id="
+  
+  url <- paste0(url_stub,url_num_of_groups,url_query,url_page)
+  raw_contents <- GET(url = url)
+
+  json_raw <- httr::content(raw_contents, type = "text")
+  json_contents <- sub('^\\{"results":\\[', "[", json_raw)
+  json_contents <- sub('\\],"meta"\\:\\{.*\\}.$', "]",json_contents)
+  gsub('\\\\/', "/",json_contents)  %>% as.tbl_json 
+  }
+
+my_spread_values <- function(x, names_list, string_type) { 
+  # A wrapper for "spread_values" that taks a list of names and a string type, so there's much less code...
+  # stopifnot( as.character(string_type) %in% c("jnumber", "jstring", "jlogical") )
+  do.call("spread_values", 
+    c(list(x), setNames(lapply(names_list, string_type), as.list(names_list) ) ) )
+} 
+
+get_json_data_types <- function(my_tbl_json) {
+# find the keys to the json, to determine which function sequence to use for retrieval
+  json_data_types <- my_tbl_json %>% gather_array %>% gather_keys %>% json_types %>% group_by(key, type) %>% summarise(count = n())
+  json_data_types <- ungroup(json_data_types) %>% mutate(key = as.character(key), type = as.character(type)) %>% arrange(type, key)
+}
+
+get_object_keys <- function(json_obj, object_name) {
+# slightly different sequence to find the keys to an OBJECT:
+  json_obj %>% gather_array %>%
+  enter_object(object_name) %>% gather_keys %>% json_types %>% 
+  group_by(key, type) %>% summarise(count = n())
+}
+
+```
+Groups  data documented here: http://www.meetup.com/meetup_api/docs/find/groups/
+&only=created,category,description,id,join_mode,members,name,urlname,visibility,organizer,welcome_message,who,next_event
+```{r Query API}
+
+json1 <- get_json(num_groups = 200, page_num = 0)
+json2 <- get_json(num_groups = 200, page_num = 1)
+json3 <- get_json(num_groups = 200, page_num = 2)
+json4 <- get_json(num_groups = 200, page_num = 3)
+json5 <- get_json(num_groups = 200, page_num = 4)
+json6 <- get_json(num_groups = 200, page_num = 5)
+json7 <- get_json(num_groups = 200, page_num = 6)
+
+```
+explore, parse json for a sample to figure out the subsequent code
+```{r}
+json1 <- get_json(num_groups = 200, page_num = 0)
+data_types <- get_json_data_types(json1)
+
+str_list  <- data_types  %>% filter(type == "string")  %>% select(key)
+str_array  <- str_list  %>% unlist  %>% as.array 
+str_array
+
+# str_list <- c("city", "country", "description", "join_mode", "link", "name", "state", "timezone", 
+# "urlname", "visibility", "who")
+
+num_list  <- data_types  %>% filter(type == "number")  %>% select(key)
+num_array  <- num_list  %>% unlist  %>% as.array
+num_array
+# num_list <- c("created", "id", "lat", "lon", "members", "score" )
+
+data_types %>% filter(type != "string" & type != "number")
+
+cat_keys <- json1 %>% get_object_keys("category") %T>% print
+event_keys <- json1 %>% get_object_keys("next_event") %T>% print
+org_keys <- json1 %>% get_object_keys("organizer") %T>% print
+
+```
+
+
+# Now define functions to upack json for this query
+```{r}
+
+parse_group <- function(json) {
+
+group_string_vars <- c("score", "id", "name", "link", "urlname", "description", "city", "country", "state", "join_mode", "visibility", "who", "timezone")
+
+group_numeric_vars <- c("created", "lat", "lon", "members")
+
+group1 <- json %>% 
+    gather_array %>% 
+    my_spread_values(
+     group_string_vars, jstring ) %>% 
+  select(-document.id)
+
+group2 <- json %>% 
+    gather_array %>% 
+    my_spread_values(
+     group_numeric_vars, jnumber )  %>% 
+  select(-document.id)
+group2$created <- as.POSIXct(group2$created/1000, origin = "1970-01-01")
+
+group3 <- json %>% 
+  gather_array %>% 
+  spread_values(group_id = jstring("id" ) ) %>%
+  enter_object("organizer") %>%
+    spread_values(
+        organizer_id = jstring(  "id"),
+        organizer_name = jstring("name"),
+        organizer_bio = jstring( "bio")
+        ) %>% select(-array.index, -document.id )
+
+group_category <- json %>%  
+    gather_array %>%  #gather_keys %>%
+    spread_values(group_id = jstring("id" ) ) %>%
+      enter_object("category") %>%
+      spread_values(
+        category_id = jstring("id"),
+        category_name = jstring("name"),
+        category_short_name = jstring("shortname")
+      ) %>% 
+   select(-array.index, -document.id )
+      
+group <- left_join(group1, group2, by = c("array.index" = "array.index"))
+group <- left_join(group, group3, by = c("id" = "group_id")) 
+group <- left_join(group, group_category, by = c("id" = "group_id")) %>% select(-array.index)
+group
+}
+
+parse_next_event <- function(json) {
+  meet_event <- json %>%  as.tbl_json %>% 
+  gather_array %>%  #gather_keys %>% 
+  spread_values(group_id = jstring("id") ) %>%
+    enter_object("next_event") %>% 
+    spread_values(
+      next_event_id = jstring("id"), 
+      next_event_name = jstring("name"), 
+      next_event_time = jnumber("time"), 
+      next_event_utc_offset = jnumber("utc_offset"), 
+      next_event_yes_rsvp_count = jnumber("yes_rsvp_count") 
+    ) %>% 
+    select(-array.index, -document.id )
+    meet_event$next_event_time <- as.POSIXct(meet_event$next_event_time/1000, origin = "1970-01-01")
+    meet_event
+  }
+
+# Unpack, put them together and save...
+
+group1 <- parse_group(json1)
+next_event1 <- parse_next_event(json1)
+
+group2 <- parse_group(json2)
+next_event2 <- parse_next_event(json2)
+
+group3 <- parse_group(json3)
+next_event3 <- parse_next_event(json3)
+
+group4 <- parse_group(json4)
+next_event4 <- parse_next_event(json4)
+
+group5 <- parse_group(json5)
+next_event5 <- parse_next_event(json5)
+
+group6 <- parse_group(json6)
+next_event6 <- parse_next_event(json6)
+
+group7 <- parse_group(json7)
+next_event7 <- parse_next_event(json7)
+
+groups <- bind_rows(group1,group2,group3,group4,group5,group6,group7) 
+next_events <- bind_rows(next_event1,next_event2,next_event3,next_event4,next_event5,next_event6,next_event7) 
+
+# already merged into groups, but maybe worth keeping separate
+
+save(groups, next_events, file = "meetup_groups.Rdata")
+
+rm(group1,group2,group3,group4,group5,group6,group7)
+rm(next_event1,next_event2,next_event3,next_event4,next_event5,next_event6,next_event7)
+
+```
+Dig into tech
+```{r}
+
+active_tech <- left_join(groups, next_events, by = c("id" = "group_id") ) %>% 
+  filter(category_name == "Tech")
+
+multi_meetup_organizers <- active_tech %>% group_by(organizer_id) %>% summarise(groups_organized = n()) %>% 
+  filter(groups_organized > 1) %>% left_join(active_tech) %>% 
+  select(organizer_name, groups_organized, name, link, urlname, description, join_mode, visibility, who, created, members, organizer_bio, next_event_id, next_event_name, next_event_time, next_event_utc_offset, next_event_yes_rsvp_count)
+
+have_data <- active_tech %>% filter(str_detect(str_to_lower(active_tech$description),"data")) %>% 
+  select(name, link, description, join_mode, who, created, members, organizer_name, organizer_bio, next_event_id, next_event_name, next_event_time, next_event_yes_rsvp_count)
+dim(have_data)
+```
+Upload to Google Drive.
+```{r}
+upload_google_ss(have_data,"PDX Meetups with 'data' in description")
+upload_google_ss(multi_meetup_organizers,"PDX Tech Meetup Organizers with multiple Meetups")
+```
+

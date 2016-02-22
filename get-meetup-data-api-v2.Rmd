@@ -1,0 +1,137 @@
+---
+title: "Get Meetup data"
+author: "John D. Smith"
+date: "December 3, 2015"
+output: html_document
+---
+&category=34,2
+
+tech category=34
+careerbiz - category=2
+
+only=id,name
+offset = 0-?
+
+API docoumentation: http://www.meetup.com/meetup_api/docs/find/groups/ 
+for testing: https://secure.meetup.com/meetup_api/console/?path=/find/groups
+
+```{r}
+library(httr)
+library(lubridate)
+library(jsonlite)
+library(plyr)
+library(dplyr)
+library(tidyjson)
+library(readr)
+# library(rjson)
+# library(RJSONIO)
+
+options(stringsAsFactors = FALSE)
+
+meetup_api <- Sys.getenv("meetup_api")
+```
+sample data documented here: http://www.meetup.com/meetup_api/docs/find/groups/
+&only=created,category,description,id,join_mode,members,name,urlname,visibility,organizer,welcome_message,who,next_event
+```{r Query API}
+url_group_start <- paste0("https://api.meetup.com/find/groups?sign=true&photo-host=public&key=", meetup_api)
+url_query <- "&zip=97206&radius=3&page=4"
+
+page_num = 0
+url_page <- paste0("&offset=", page_num)
+# paste0(url_group_start,url_query,url_page)
+url <- paste0(url_group_start,url_query,url_page)
+url
+raw_contents <- GET(url = url)
+jsonp <- content(raw_contents, "text")
+# prettify(jsonp[[1]]) # generates a huge amount of output!
+# json <- gsub('([a-zA-Z_0-9\\.]*\\()|(\\);?$)', "", jsonp, perl = TRUE)
+# json <- gsub('"','\"', jsonp, perl = T)
+# tech_sample <- fromJSON(jsonp, flatten = T)
+# tech_sample is a list of data frames?
+# df  <- ldply(tech_sample, data.frame)
+
+# show the first two records as JSON
+tech_sample[1:2] %>% toJSON %>% prettify(indent = 2)
+
+# raw_as_chars <- as.character(raw_contents$content)
+# tech_sample <- fromJSON(url )
+
+```
+try tidyjson again!
+```{r}
+ts <- fromJSON(json)
+ts1 <- ts[[1]]
+dput(ts1, file = "ts1.txt")
+df <- as.character(ts) %>% as.tbl_json %>% gather_array %>% 
+  spread_values(visibility = jstring("visibility")) %>%
+  enter_object(category) %>% 
+  spread_values(
+    category_name = jstring("name"),
+    category_id = jstring("id")
+  ) %>% select(who,name,category_name,category_id)
+  
+```
+
+```{r}
+df0 <- rbind.fill(lapply(tech_sample, as.data.frame))
+
+page_num = 1
+url_page <- paste0("&offset=", page_num)
+tech_sample <- fromJSON(paste0(url_group_start,url_query,url_page) )
+length(tech_sample)
+df1 <- rbind.fill(lapply(tech_sample, as.data.frame))
+
+df <- bind_rows(df0, df1)
+
+df <- df %>% arrange(desc(members))
+dfa1 <- dfa %>% select(-description)
+
+# str(df)
+```
+create a data frame and examine
+
+tech_decoded <- rawToChar(tech_sample$content)
+# groups_list <- do.call(what = "rbind", args = lapply(tech_decoded, as.data.frame))
+groups_list <- as.data.frame(fromJSON(tech_decoded, simplifyDataFrame = T, flatten = T))
+groups_list <- flatten(groups_list, recursive = T)
+groups_list <- ungroup(groups_list)
+head(groups_list, n = 1)
+typeof(groups_list)
+groups_list <- as.data.frame(groups_list)
+# write.csv(groups_list,path = "groups_list.csv" )
+unl  <- unlist(groups_list)
+
+
+```{r}
+page_num = 0
+url_page <- paste("&offset = ", page_num)
+url_group_start <- paste0("https://api.meetup.com/find/groups?sign=true&photo-host=public&key=", meetup_api)
+url_query <- "&zip=97206&radius=3&page=3"
+all_sample <- GET(url = paste0(url_group_start,url_query,url_page))
+all_sample$status_code
+n_groups <- as.numeric(all_sample$headers$`x-total-count`)
+n_groups
+
+```
+try to unpack the data frame
+```{r}
+tech_decoded <- tech_decoded %>% as.character %>% as.tbl_json()
+tech_decoded %>% gather_array() %>% json_lengths()
+df <- tech_decoded %>% gather_array() %>% gather_keys() %>% json_types() %>% as.data.frame()
+
+typeof(df)
+
+tech_decoded <- as.data.frame(tech_decoded)
+tech_decoded %>% gather_array() %>% gather_keys()
+typeof(tech_decoded)
+```
+
+```{r}
+x <-  paste0('<hr><h2><a href="http://meetup.com/', df$urlname, '">', df$name, '</a></h2>for: <b>', df$members, "</b> ", df$who, 
+            "<br>", 
+            as.character(df$description), "</hr>")
+x <- paste("<html>", x, "</html>")
+writeLines(x, con = "all-meetups.html", sep = "\n")
+```
+?
+

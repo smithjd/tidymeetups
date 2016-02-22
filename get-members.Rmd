@@ -1,0 +1,361 @@
+---
+title: "get-members"
+author: "John D. Smith"
+date: "December 22, 2015"
+output: html_document
+---
+&category=34,2
+
+tech category=34
+careerbiz - category=2
+
+only=id,name
+offset = 0-?
+
+API docoumentation: 
+* groups: http://www.meetup.com/meetup_api/docs/find/groups/ 
+* members: http://www.meetup.com/meetup_api/docs/2/members/
+for testing: https://secure.meetup.com/meetup_api/console/?path=/find/groups
+
+```{r}
+library(httr)
+library(stringr)
+library(lubridate)
+library(jsonlite)
+library(plyr)
+library(dplyr)
+library(tidyjson)
+library(readr)
+library(ggplot2)
+source("~/Rfunctions/setup_my_google.R")
+setwd("~/Documents/cch/data-sci-pdx")
+options(stringsAsFactors = FALSE)
+
+# group_id <- 16967362
+meetup_api <- Sys.getenv("meetup_api")
+
+```
+Standard tidyjson functions
+```{r}
+my_spread_values <- function(x, names_list, string_type) { 
+  # A wrapper for "spread_values" that taks a list of names and a string type, so there's much less code...
+  # stopifnot( as.character(string_type) %in% c("jnumber", "jstring", "jlogical") )
+  do.call("spread_values", 
+    c(list(x), setNames(lapply(names_list, string_type), as.list(names_list) ) ) )
+} 
+
+get_json_tbl_data_types <- function(my_tbl_json) {
+# find the keys to the json, to determine which function sequence to use for retrieval
+  json_data_types <- my_tbl_json %>% gather_array %>% gather_keys %>% json_types %>% group_by(key, type) %>% summarise(count = n())
+  json_data_types <- ungroup(json_data_types) %>% mutate(key = as.character(key), type = as.character(type)) %>% arrange(type, key)
+}
+
+get_object_keys <- function(json_obj, object_name) {
+# slightly different sequence to find the keys to an OBJECT:
+  json_obj %>% gather_array %>%
+  enter_object(object_name) %>% gather_keys %>% json_types %>% 
+  group_by(key, type) %>% summarise(count = n())
+}
+
+```
+identify groups
+```{r}
+groups <- readRDS( "meetup_groups.Rdata")
+
+# for testing:
+groups %>% filter(grepl("data|chifoo", name, ignore.case = T)) %>% select(id,name)
+```
+
+explore the json about get member info ... 
+separate query to get members other groups...
+```{r}
+
+get_json_tbl <- function(num_members, page_num, group_id, meetup_api = Sys.getenv("meetup_api")) {
+ 
+  
+  (url <- paste0(url_member_stub,url_num_of_groups,url_query,group_id,url_page))
+  raw_contents <- GET(url = url)
+
+  json_raw <- httr::content(raw_contents, type = "text")
+  json_contents <- sub('^\\{"results":\\[', "[", json_raw)
+  json_contents <- sub('\\],"meta"\\:\\{.*\\}.$', "]",json_contents)
+  gsub('\\\\/', "/",json_contents)
+  }
+
+json <- get_json_tbl(num_members = 200 , group_id = 16967362, page_num = 1)
+
+# json2 <- get_json_tbl(num_members = 200, page_num = 1)
+# json3 <- get_json_tbl(num_members = 200, page_num = 2)
+
+json_obj <- json %>% as.tbl_json 
+
+json_data_types <- get_json_tbl_data_types(json_obj)
+
+json_data_types %>% filter(type == "number") %>% select(key) %>% unlist %>% as.array
+json_data_types %>% filter(type == "string") %>% select(key) %>% unlist %>% as.array 
+json_data_types %>% filter(type != "string" & type != "number") %>% select(key, type) 
+
+num_list <- c("id", "joined", "lat", "lon", "visited")
+chr_list <- c("bio", "city", "country", "hometown", "lang", "link", "name", "state", "status")
+
+other_services_keys <- get_object_keys(json_obj, "other_services")
+other_services_keys
+
+service_key_list <- c("flickr", "tumblr", "twitter", "linkedin")
+
+```
+
+# Now define functions to upack json for this query
+```{r}
+get_json_tbl <- function(page_num, group_id) {
+	url <- paste0("https://api.meetup.com/2/members?sign=true&page=200&key=", meetup_api, "&group_id=", group_id, "&offset=", page_num)
+  raw_contents <- GET(url = url)
+
+  json_raw <- httr::content(raw_contents, type = "text")
+  json_contents <- sub('^\\{"results":\\[', "[", json_raw)
+  json_contents <- sub('\\],"meta"\\:\\{.*\\}.$', "]",json_contents)
+  gsub('\\\\/', "/",json_contents)  %>% as.tbl_json 
+  }
+
+get_group_data_frame <- function(group_id) {
+  
+  page_num <- 0  
+  num_list <- c("joined", "lat", "lon", "visited")
+  chr_list <- c("id", "bio", "city", "country", "hometown", 
+  	"lang", "link", "name", "state", "status")
+  
+  while (page_num >= 0) {
+    
+    tbl_json <- get_json_tbl(page_num = page_num, group_id = group_id)
+  
+  	 mem_strings <- tbl_json %>% gather_array %>% 
+  	   my_spread_values(
+  	      chr_list, jstring ) %>% 
+  	   select(-document.id, rec_num = array.index) %>% 
+  	   mutate(member_of_group = group_id)
+  
+  	 mem_numerics <- tbl_json %>% gather_array %>% 
+  	   my_spread_values(
+  	      num_list, jnumber ) %>% 
+  	    select(-document.id, rec_num = array.index) 
+  	 mem_numerics$joined <- as.POSIXct(mem_numerics$joined/1000, origin = "1970-01-01")
+  	 mem_numerics$visited <- as.POSIXct(mem_numerics$visited/1000, origin = "1970-01-01")
+      
+  	 mem_twitter_id <- tbl_json %>% gather_array %>% 
+  	   spread_values(mem_id = jstring("id") ) %>%
+  	   enter_object("other_services") %>% enter_object("twitter") %>% 
+  	   spread_values(twitter_id = jstring("identifier") ) %>% select(-array.index, -document.id)   
+  
+  	 mem_linkedin_id <- tbl_json %>% gather_array %>% 
+  	   spread_values(mem_id = jstring("id") ) %>%
+  	   enter_object("other_services") %>% enter_object("linkedin") %>% 
+  	   spread_values(linkedin_id = jstring("identifier") ) %>% 
+  	   select(-array.index, -document.id)   
+           
+      members <- left_join(mem_strings, mem_numerics, by = c("rec_num" = "rec_num"))
+      members <- left_join(members, mem_twitter_id, by = c("id" = "mem_id")) 
+      members <- left_join(members, mem_linkedin_id, by = c("id" = "mem_id")) %>% 
+        select(-rec_num)    
+      
+     member_topics <- tbl_json %>% gather_array %>% 
+       spread_values(member_id = jstring("id")) %>%
+       enter_object("topics") %>% gather_array %>%
+       my_spread_values(c("id","name","urlkey"), jstring) %>% 
+       select(-array.index, -document.id) %>% 
+  	   mutate(member_of_group = group_id) %>% rename(topic_id = id)
+    	
+      # accumulate batches into groups_id data frames
+      if (page_num == 0 ) {
+        group_id_members <- members
+  	    group_id_topics <- member_topics
+  	  } else {
+        group_id_members <- bind_rows(group_id_members, members)
+        group_id_topics <- bind_rows(group_id_topics, member_topics)
+      }
+    
+      # get another batch or jump out of the retrieval loop
+      page_num <- page_num + 1
+      if ( dim(mem_strings)[1] < 200 ) { 
+        # have run out of data for this group
+        page_num <-  -1
+      } 
+    
+    Sys.sleep(1) # wait between iterations
+    cat('.')
+    
+    }  
+	
+    cat("+")
+    return(list("mems" = group_id_members, "topics" = group_id_topics))
+  }  # finish this group_id
+
+# test with:
+# data_groups_list <-  c("11038292", "16967362", "13789762")
+
+get_many_groups <- function(list_of_ids){
+  for (list_num in seq_along(list_of_ids) ) {
+    # cat(paste(list_num, ",", list_of_ids[list_num], "\n") )
+    dataframes_this_list <- get_group_data_frame(group_id = list_of_ids[list_num])
+    # unpack the results
+     # accumulate batches into groups_id data frames
+      if (list_num == 1 ) {
+        # initialize
+        cum_members <- dataframes_this_list[["mems"]]
+  	    cum_topics <- dataframes_this_list[["topics"]]
+  	  } else {
+  	    # accumulate
+        cum_members <- bind_rows(cum_members, dataframes_this_list[["mems"]])
+        cum_topics <- bind_rows(cum_topics, dataframes_this_list[["topics"]])
+      }
+    }
+  return(list("all_members" = cum_members, "all_topics" = cum_topics))  
+  }
+
+data_groups_list <- c("11038292", "16967362", "13789762", "18393607", "15174102", "19149214", "17840052", "10136492", "6949282", "17836232", "6622532", "8245962")
+
+many_groups <- get_many_groups(data_groups_list)
+more_data_groups_list <- c("19149214", "17753372","16786942")
+some_groups <- get_many_groups(more_data_groups_list)
+python <- get_many_groups("490808")
+useRs <-  get_many_groups("1685557")
+
+```
+Extract and save
+```{r}
+all_members <- many_groups[["all_members"]]
+all_topics <- many_groups[["all_topics"]]
+more_members <- some_groups[["all_members"]]
+more_topics <- some_groups[["all_topics"]]
+more_members <- python[["all_members"]]
+more_topics <- python[["all_topics"]]
+useRs_members <- useRs[["all_members"]]
+useRs_topics <- useRs[["all_topics"]]
+
+
+all_members <- bind_rows(all_members,useRs_members)
+all_topics <- bind_rows(all_topics, useRs_topics)
+
+write_rds(all_members, "all_data_meetup_members.Rdata")
+write_rds(all_topics, "all_data_meetup_topics.Rdata")
+
+```
+retrieve
+```{r}
+all_members <- readRDS( "all_data_meetup_members.Rdata")
+dim(all_members)
+all_topics <- readRDS( "all_data_meetup_topics.Rdata")
+dim(all_topics)
+```
+Inpsect and summarize
+```{r}
+all_members %>% group_by(member_of_group) %>% summarize(member_count = n())
+all_members %>% summarize(member_count = n())
+
+group_topics <- all_topics %>% group_by(urlkey) %>% summarize(count = n()) %>% ungroup %>% arrange(desc(count))
+dim(group_topics)
+# 1486 with "name"
+```
+topic data munging
+```{r}
+grouped_topics  <- read_tsv("group_topics_csv.tsv")
+View(grouped_topics)
+grouped_topics  <- grouped_topics  %>% group_by(url_key_copy)  %>% summarize(count = sum(count))
+
+```
+graph em?
+* cumulative membership over time by group
+* last time visited by group
+
+Start by labeling groups
+```{r}
+group_tags <- read_tsv("~/Documents/cch/data-sci-pdx/group_tags.tsv", col_types = "cc")
+str(group_tags)
+
+all_members <- left_join(all_members, group_tags, by = c("member_of_group" = "ID") )
+tag_count  <- all_members %>% group_by(tag) %>% summarise(n_member_count = n()) %>% ungroup %>% arrange(desc(n_member_count))
+head(tag_count)
+# upload_google_ss(tag_count)
+group_members <- all_members %>% filter(member_of_group %in% 
+c("11038292", "16967362", "18393607", "1685557", "490808") )
+``` 
+
+```{r}
+ggplot(all_members, aes(x = tag, y = visited)) + 
+  geom_boxplot() +
+  ggtitle("Date of last visit, selected Meetup groups") +
+  xlab("Group name") +
+  ylab("Date of last visit")
+# (inherit.aes = stat="identity", position="dodge")
+```
+Group growth
+```{r}
+growth <- all_members %>% select(tag,joined) %>% 
+  group_by(tag) %>% ungroup 
+
+group_growth <- group_members %>% select(tag,joined) %>% 
+  group_by(tag) %>% ungroup 
+
+# %>%  
+#    mutate(group_size = row_number)
+str(growth)
+group_growth <- group_growth %>% ungroup %>% arrange(tag,joined) %>% group_by(tag) %>%  
+  mutate(count = 1, head_count =  cumsum(count)) %>% 
+  filter(joined > "2012-01-01")
+ggplot(group_growth, aes(joined,head_count, colour = tag) ) + geom_line() +
+ ggtitle("Membership count by date (withdrawals not included)") +
+  xlab("Date joined") +
+  ylab("Total members")
+
+```
+Wordclouds of member topics
+PDX Data Science Group, PDX Data User Group, PDX Data Engineering
+R
+Python
+```{r}
+library("wordcloud")
+pal <- brewer.pal(6,"Dark2")
+
+main_meetups <- c("11038292", "16967362", "18393607")
+r_meetup <- "1685557"
+python_meetup <- "490808"
+
+main_meetup_topics <- all_topics %>% filter(member_of_group %in% main_meetups) %>% 
+  mutate(topic_name = gsub(" ", "",  name))
+# verify the number of topic records
+# main_meetup_topics  %>% group_by (member_of_group)  %>% summarize(count = n())
+
+main_meetup_counts <- main_meetup_topics %>% group_by(topic_name) %>% 
+  summarize(freq = n()) %>% ungroup
+summary(main_meetup_counts$freq)
+
+wordcloud(main_meetup_counts$topic_name,main_meetup_counts$freq, min.freq = 10, max.words = 100, colors = pal)
+
+python_meetup_topics <- all_topics %>% filter(member_of_group == python_meetup) %>% 
+  mutate(topic_name = gsub(" ", "",  name))
+# verify the number of topic records
+# main_meetup_topics  %>% group_by (member_of_group)  %>% summarize(count = n())
+
+python_meetup_counts <- python_meetup_topics %>% group_by(topic_name) %>% 
+  summarize(freq = n()) %>% ungroup
+summary(python_meetup_counts$freq)
+
+wordcloud(python_meetup_counts$topic_name,python_meetup_counts$freq, min.freq = 10, max.words = 100, colors = pal)
+
+r_meetup_topics <- all_topics %>% filter(member_of_group == r_meetup) %>% 
+  mutate(topic_name = gsub(" ", "",  name))
+# verify the number of topic records
+# main_meetup_topics  %>% group_by (member_of_group)  %>% summarize(count = n())
+
+r_meetup_counts <- r_meetup_topics %>% group_by(topic_name) %>% 
+  summarize(freq = n()) %>% ungroup
+summary(r_meetup_counts$freq)
+
+wordcloud(r_meetup_counts$topic_name,r_meetup_counts$freq, min.freq = 10, max.words = 100, colors = pal)
+
+```
+Get data for Scott Chamberlain
+```{r}
+r_meetup_members <- all_members %>% filter(member_of_group == r_meetup)
+save(r_meetup_topics,r_meetup_members, file="r_members_topics.Rdata")
+```
+
