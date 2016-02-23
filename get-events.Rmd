@@ -104,6 +104,7 @@ json_data_types %>% filter(type == "string") %>% select(key) %>% unlist %>% as.a
 json_data_types %>% filter(type != "string" & type != "number") %>% select(key, type) 
 
 get_object_keys(json_obj, "rating")
+get_object_keys(json_obj, "group")
 
 ```
 
@@ -149,49 +150,55 @@ get_event_data_frame <- function(group_id) {
   	 event_strings <- tbl_json %>% gather_array %>% 
   	   my_spread_values(
   	      chr_list, jstring ) %>% 
-  	   select(-document.id, rec_num = array.index) # %>% 
-  	   # mutate(eventber_of_group = group_id)
+  	   select(-document.id, rec_num = array.index) 
   
   	 event_numerics <- tbl_json %>% gather_array %>% 
   	   my_spread_values(
   	      num_list, jnumber ) %>% 
-  	    select(-document.id, rec_num = array.index) 
-  	 event_numerics$created <- as.POSIXct(event_numerics$created/1000, origin = "1970-01-01")
-  	 event_numerics$time <- as.POSIXct(event_numerics$time/1000, origin = "1970-01-01")
-  	 event_numerics$updated <- as.POSIXct(event_numerics$updated/1000, origin = "1970-01-01")
-  	 event_numerics$duration_minutes <- event_numerics$duration/60000
+  	    select(-document.id, rec_num = array.index)
+  	 
+  	 event_numerics$event_created <- as.POSIXct(event_numerics$created/1000, origin = "1970-01-01")
+  	 event_numerics$event_time <- as.POSIXct(event_numerics$time/1000, origin = "1970-01-01")
+  	 event_numerics$event_updated <- as.POSIXct(event_numerics$updated/1000, origin = "1970-01-01")
+  	 event_numerics$event_duration_minutes <- event_numerics$duration/60000
 
     group_id_events <- left_join(event_strings, event_numerics, by = c("rec_num" = "rec_num")) %>% 
-      select(-duration)
+      select(-duration, -created, -time, -updated, -duration)
 
     event_rating <- tbl_json %>% gather_array %>%
-      spread_values(event_id = jstring("id")) %>%
+      # spread_values(event_id = jstring("id")) %>%
       enter_object("rating") %>% 
       my_spread_values(c("count","average"), jnumber) %>%
+      select(-document.id, number_of_raters = count) %>%
+      mutate(rec_num = array.index)
+
+    event_group <- tbl_json %>% gather_array %>%
+      # spread_values(event_id = jstring("id")) %>%
+      enter_object("group") %>% 
+      spread_values(
+        group_created = jnumber("created"), 
+        group_id = jnumber("id"), 
+        group_join_mode = jstring("join_mode"), 
+        group_name = jstring("name"), 
+        group_urlname = jstring("urlname"), 
+        group_member_name = jstring("who")
+        ) %>% 
       select(-document.id) %>%
       mutate(group_organizing_event = group_id, rec_num = array.index)
-
+    
+      event_group$group_created <- as.POSIXct(event_group$group_created/1000, origin = "1970-01-01")
+    
     group_id_events <- left_join( group_id_events, event_rating, by = c("rec_num" = "rec_num")) %>% 
-      select(-array.index, rec_num)
-  #     members <- left_join(members, mem_twitter_id, by = c("id" = "mem_id")) 
-  #     members <- left_join(members, mem_linkedin_id, by = c("id" = "mem_id")) %>% 
-  #       select(-rec_num)    
-  #     
-  #    member_topics <- tbl_json %>% gather_array %>% 
-  #      spread_values(member_id = jstring("id")) %>%
-  #      enter_object("topics") %>% gather_array %>%
-  #      my_spread_values(c("id","name","urlkey"), jstring) %>% 
-  #      select(-array.index, -document.id) %>% 
-  # 	   mutate(member_of_group = group_id) %>% rename(topic_id = id)
-  #   	
-  #     # accumulate batches into groups_id data frames
-  #     if (page == 0 ) {
-  #       group_id_events <- events
-  # 	    group_id_topics <- member_topics
-  # 	  } else {
-  #       group_id_events <- bind_rows(group_id_events, events)
-  #       group_id_topics <- bind_rows(group_id_topics, member_topics)
-  #     }
+      select(-array.index)
+    group_id_events <- left_join( group_id_events, event_group, by = c("rec_num" = "rec_num")) %>% 
+      select(-array.index, -rec_num)
+
+      # accumulate batches into groups_id data frames
+      if (offset == 0 ) {
+        cum_group_id_events <- group_id_events
+  	  } else {
+        cum_group_id_events <- bind_rows(cum_group_id_events, group_id_events)
+      }
     
       # get another batch or jump out of the retrieval loop
       offset <- offset + 1 
@@ -202,11 +209,10 @@ get_event_data_frame <- function(group_id) {
     
     Sys.sleep(1) # wait between iterations
     cat('.')
-    
     }  
 	
     cat("+")
-    return(list("events" = group_id_events))
+    return(list("events" = cum_group_id_events))
   }  # finish this group_id
 
 # test with:
@@ -247,7 +253,7 @@ Extract and save
 Odd that Python events don't turn up when in this query
 
 ```{r}
-group_tags <- read_tsv("~/Documents/cch/tidymeetups/group_tags.tsv", col_types = "cc")
+group_tags <- read_tsv("~/Documents/cch/tidymeetups/group_tags.tsv", col_types = "nc")
 str(group_tags)
 
 selected_events <- many_groups[["all_events"]]
@@ -261,6 +267,7 @@ selected_events <- left_join(selected_events,group_tags, by = c("group_organizin
 write_rds(selected_events, "selected_data_meetup_events.Rdata")
 # write_rds(all_topics, "all_data_meetup_topics.Rdata")
 
+str(selected_events)
 ```
 retrieve
 ```{r}
@@ -272,11 +279,11 @@ upload_google_ss(all_events, "All Meetup events in the past 2 years - selected g
 ```
 explore selected events 
 ```{r}
-group_tags <- read_tsv("~/Documents/cch/tidymeetups/group_tags.tsv", col_types = "cc")
+group_tags <- read_tsv("~/Documents/cch/tidymeetups/group_tags.tsv", col_types = "nc")
 str(group_tags)
 selected_events <- left_join(selected_events,group_tags, by = c("group_organizing_event" = "ID"))
 
-selected_events  %>% filter(tag == "R Users" &  yes_rsvp_count < 5)  %>% select( time, name)
+selected_events  %>% filter(tag == "R Users" &  yes_rsvp_count < 5)  %>% select( event_time, name)
 org_events <- selected_events %>% filter(!str_detect(name, "Coursera|MOOC"))
 
 ggplot(data = org_events, aes(x = tag, y = yes_rsvp_count) ) + 
@@ -285,11 +292,28 @@ ggplot(data = org_events, aes(x = tag, y = yes_rsvp_count) ) +
   xlab("Group") +
   ylab("Interest measured by 'yes' RSVP's")
 
-ggplot(org_events, aes(x = time, y = yes_rsvp_count, colour = tag) ) + geom_smooth(se = F) +
+ggplot(org_events, aes(x = event_time, y = yes_rsvp_count, colour = tag) ) + geom_smooth(se = F) +
   geom_point() +
   ggtitle("Event size, selected meetups") +
   xlab("Date") +
   ylab("Interest measured by 'yes' RSVP's")
+
+```
+event frequency
+```{r}
+event_freq <- org_events %>% 
+  arrange(tag, event_time) %>% 
+  mutate( 
+    last_event = lag(event_time,1, order_by = event_time),
+    days_elapsed = round(as.numeric(event_time - last_event)/  86400)
+    ) %>% 
+  select(name, tag, last_event, event_time, days_elapsed)
+
+ggplot(data = event_freq, aes(x = tag, y = days_elapsed) ) + 
+  geom_boxplot() + 
+   ggtitle("Event frequency, selected meetups") +
+  xlab("Group") +
+  ylab("Days since previous event")
 
 ```
 
