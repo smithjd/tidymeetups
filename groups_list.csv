@@ -1,0 +1,6 @@
+score,id,name,link,urlname,description,created,city,country,state,join_mode,visibility,lat,lon,members,who,timezone,photos,organizer.id,organizer.name,organizer.bio,organizer.photo.id,organizer.photo.highres_link,organizer.photo.photo_link,organizer.photo.thumb_link,group_photo.id,group_photo.highres_link,group_photo.photo_link,group_photo.thumb_link,next_event.id,next_event.name,next_event.yes_rsvp_count,next_event.time,next_event.utc_offset,category.id,category.name,category.shortname
+1,1522606,NewTech PDX,http://www.meetup.com/NewTechPDX/,NewTechPDX,"<p> </p>
+<iframe src=""http://www.youtube.com/embed/mD-QI0uY4CY"" width=""470"" height=""264"" style=""margin : 5px ; max-width : 700px ; max-height : 700px""></iframe> 
+<p> </p>
+<p><span>Welcome to NewTech PDX, Portland's premier ongoing monthly tech event.  This event is for the community, by the community! Done in partnership with local community resources, our events</span> <span>happen on the 3rd Monday evening and the 3rd Friday morning of every month. Want to know more? Just ask!</span></p>
+<p><span>See you at our next event!</span></p>",1252788674000,Portland,US,OR,open,public,45.5200004577637,-122.639999389648,4123,Tech Fanatics,US/Pacific,

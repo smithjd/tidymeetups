@@ -21,6 +21,7 @@ library(tidyjson)
 library(readr)
 library(magrittr)
 library(stringr)
+library(ggplot2)
 
 source("~/Rfunctions/setup_my_google.R")
 setwd("~/Documents/cch/tidymeetups")
@@ -226,5 +227,14 @@ str(group_tags)
 Retrieve and upload
 ```{r}
 upload_google_ss(groups,"All Portland Meetup groups")
+```
+
+```{r}
+ggplot(data = groups, aes(category_short_name, members)) + 
+  geom_boxplot() + 
+  ylim(NA,5000) +
+  coord_flip() +
+  ggtitle("1,262 Portland Meetup Groups") + xlab("Group Category") + ylab("Current number of members (3 groups with more than 5,000 members removed)")
+
 ```
 

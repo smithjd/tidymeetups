@@ -1,0 +1,48 @@
+---
+title: "adv-r-functions"
+author: "John D. Smith"
+date: "December 24, 2015"
+output: html_document
+---
+
+```{r}
+summary <- function(x) {
+  funs <- c(mean, median, sd, mad, IQR)
+  lapply(funs, function(f) f(x, na.rm = TRUE))
+}
+s <- summary(mtcars)
+
+
+```
+# out[[i]] <- paste0(x[[i]], ' = jnumber("', x[[i]],'")')
+   # if(i >= 1) { out[[i]] <- paste0(', ', out[[i]]) }
+```{r}
+  # next_event_time = jnumber("time"),
+alljnumbers <- function(x) {
+  out <- vector( "list" , length(x))
+  for (i in seq_along(x)) {
+    # out[[i]] <- paste0(x[[i]], ' <- ',  1)
+     out[[i]] <- paste0(', \n ', x[[i]], ' = jnumber("', x[[i]],'")')
+  
+  }
+  out
+}
+code <-  alljnumbers(c("time","yes_rsvp_count"))
+
+```
+just try it!
+```{r}
+tcode <- ' next_yes_rsvp_count = jnumber("next_yes_rsvp_count")'
+
+ meet_event <- json1 %>%  as.tbl_json %>% 
+    gather_array %>%  #gather_keys %>% 
+    spread_values(
+      group_id = jstring("id")
+  ) %>%
+      enter_object("next_event") %>% 
+      spread_values(
+        eval(parse(text = tcode))
+      ) 
+
+ names(meet_event)
+```
