@@ -232,9 +232,11 @@ upload_google_ss(groups,"All Portland Meetup groups")
 ```{r}
 ggplot(data = groups, aes(category_short_name, members)) + 
   geom_boxplot() + 
-  ylim(NA,5000) +
+  scale_y_log10(breaks = c(0,3,10,30,100,300,1000,3000,10000)) +
+  # ylim(NA,5000) +
   coord_flip() +
-  ggtitle("1,262 Portland Meetup Groups") + xlab("Group Category") + ylab("Current number of members (3 groups with more than 5,000 members removed)")
+  # ggtitle("1,262 Portland Meetup Groups") + xlab("Group Category") + ylab("Current number of members (3 groups with more than 5,000 members removed)")
+  ggtitle("1,262 Portland Meetup Groups - March 2016") + xlab("Group Category") + ylab("Current number of members")
 
 ```
 

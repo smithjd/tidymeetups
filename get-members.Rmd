@@ -28,7 +28,7 @@ library(tidyjson)
 library(readr)
 library(ggplot2)
 source("~/Rfunctions/setup_my_google.R")
-setwd("~/Documents/cch/data-sci-pdx")
+setwd("~/Documents/cch/tidymeetups")
 options(stringsAsFactors = FALSE)
 
 # group_id <- 16967362
@@ -58,6 +58,7 @@ get_object_keys <- function(json_obj, object_name) {
 }
 
 ```
+SKIP THIS!
 identify groups
 ```{r}
 groups <- readRDS( "meetup_groups.Rdata")
@@ -65,7 +66,7 @@ groups <- readRDS( "meetup_groups.Rdata")
 # for testing:
 groups %>% filter(grepl("data|chifoo", name, ignore.case = T)) %>% select(id,name)
 ```
-
+SKIP THIS!
 explore the json about get member info ... 
 separate query to get members other groups...
 ```{r}
@@ -211,29 +212,24 @@ get_many_groups <- function(list_of_ids){
   return(list("all_members" = cum_members, "all_topics" = cum_topics))  
   }
 
-data_groups_list <- c("11038292", "16967362", "13789762", "18393607", "15174102", "19149214", "17840052", "10136492", "6949282", "17836232", "6622532", "8245962")
+data_groups_list <- c("11038292", "16967362", "13789762", "18393607", "15174102", "19149214", "17840052", "10136492", "6949282", "17836232", "6622532", "8245962", "490808", "1685557", "17753372", "16786942")
 
 many_groups <- get_many_groups(data_groups_list)
-more_data_groups_list <- c("19149214", "17753372","16786942")
-some_groups <- get_many_groups(more_data_groups_list)
-python <- get_many_groups("490808")
-useRs <-  get_many_groups("1685557")
 
 ```
 Extract and save
 ```{r}
 all_members <- many_groups[["all_members"]]
 all_topics <- many_groups[["all_topics"]]
-more_members <- some_groups[["all_members"]]
-more_topics <- some_groups[["all_topics"]]
-more_members <- python[["all_members"]]
-more_topics <- python[["all_topics"]]
-useRs_members <- useRs[["all_members"]]
-useRs_topics <- useRs[["all_topics"]]
+# more_members <- some_groups[["all_members"]]
+# more_topics <- some_groups[["all_topics"]]
+# more_members <- python[["all_members"]]
+# more_topics <- python[["all_topics"]]
+# useRs_members <- useRs[["all_members"]]
+# useRs_topics <- useRs[["all_topics"]]
 
-
-all_members <- bind_rows(all_members,useRs_members)
-all_topics <- bind_rows(all_topics, useRs_topics)
+# all_members <- bind_rows(all_members,useRs_members)
+# all_topics <- bind_rows(all_topics, useRs_topics)
 
 write_rds(all_members, "all_data_meetup_members.Rdata")
 write_rds(all_topics, "all_data_meetup_topics.Rdata")
@@ -268,7 +264,7 @@ graph em?
 
 Start by labeling groups
 ```{r}
-group_tags <- read_tsv("~/Documents/cch/data-sci-pdx/group_tags.tsv", col_types = "cc")
+group_tags <- read_tsv("~/Documents/cch/tidymeetups/group_tags.tsv", col_types = "cc")
 str(group_tags)
 
 all_members <- left_join(all_members, group_tags, by = c("member_of_group" = "ID") )
@@ -301,8 +297,11 @@ str(growth)
 group_growth <- group_growth %>% ungroup %>% arrange(tag,joined) %>% group_by(tag) %>%  
   mutate(count = 1, head_count =  cumsum(count)) %>% 
   filter(joined > "2012-01-01")
+
+write_rds(group_growth, "group_growth.Rds")
+
 ggplot(group_growth, aes(joined,head_count, colour = tag) ) + geom_line() +
- ggtitle("Membership count by date (withdrawals not included)") +
+ ggtitle("Total membership by date\n(withdrawals are not counted)") +
   xlab("Date joined") +
   ylab("Total members")
 

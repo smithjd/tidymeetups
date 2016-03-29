@@ -1,0 +1,72 @@
+---
+title: "Event size and group growth"
+author: "John D. Smith"
+date: "March 10, 2016"
+output: html_document
+---
+
+```{r}
+# library(stringr)
+library(lubridate)
+library(dplyr)
+library(readr)
+library(ggplot2)
+source("~/Rfunctions/setup_my_google.R")
+setwd("~/Documents/cch/tidymeetups")
+options(stringsAsFactors = FALSE)
+```
+
+```{r}
+group_growth <- read_rds("group_growth.Rds") %>% ungroup() 
+group_growth <- group_growth %>% 
+  mutate(joined = as.Date(joined))
+str(group_growth)
+
+selected_events <- read_rds("selected_data_meetup_events.Rdata") 
+selected_events <- selected_events %>%  
+  select(headcount, yes_rsvp_count, event_time, group_created, tag, name) %>% rename(joined = event_time) %>% 
+  mutate(joined = as.Date(joined))
+str(selected_events)
+
+selected_events$cut_rsvp <- cut(selected_events$yes_rsvp_count, breaks = seq(0, 100, by = 10), labels = F )
+
+ggplot(group_growth, aes(joined,head_count, colour = tag) ) + geom_line() +
+ ggtitle("Total membership by date\n(withdrawals are not counted)") +
+  xlab("Date joined") +
+  ylab("Total members")
+
+# 
+# ggplot(data = selected_events, 
+#        aes(x = joined, 
+#            y = group_created, 
+#            colour = tag,
+#            scale_size = cut_rsvp ) ) +
+#   geom_point(shape = 19, alpha = .25, 
+#              size =  selected_events$cut_rsvp, stroke = 1) 
+
+```
+try to combine
+```{r}
+# event_size <- selected_events %>% 
+#   select(event_time, yes_rsvp_count, cut_rsvp, tag, name) %>% 
+#   rename(joined = event_time) %>% 
+#   mutate(joined = round_date(joined, unit = "day"))
+
+joined <- bind_rows(selected_events, group_growth)
+
+# this is a real hack.  Some 18 events don't have a meet_head_count after this, but it's close...
+joined <- joined %>% arrange(tag, (joined)) %>% 
+  mutate(meet_head_count = lag(head_count), 
+         meet_head_count = ifelse(!is.na(meet_head_count),lag(meet_head_count),meet_head_count)) %>% 
+  filter(!is.na(name))
+
+ggplot(joined, aes(joined, meet_head_count, size = yes_rsvp_count , colour = tag) ) + 
+  geom_point(alpha = .5) +
+ ggtitle("Selected Portland Data Science MeetUp Events") +
+  xlab("Event Date") +
+  ylab("Current Members") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+  labs(colour = "Group", size = "RSVP's")
+
+```
+
